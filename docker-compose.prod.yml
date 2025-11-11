@@ -1,0 +1,315 @@
+version: '3.8'
+
+# Production Docker Compose Configuration (B:deploy002)
+# For Docker Swarm deployment with external load balancer integration
+
+services:
+  # MCP Client Application - Production Configuration
+  mcp-client:
+    build:
+      context: ./client-application
+      dockerfile: Dockerfile.prod
+    image: mcp-client:${VERSION:-latest}
+    depends_on:
+      - knowledge-graph
+      - auth-service
+    networks:
+      - mcp-internal
+    environment:
+      - NODE_ENV=production
+      - GRAPH_DB_URL=postgresql://graphuser:${POSTGRES_PASSWORD}@knowledge-graph:5432/mcpgraph
+      - AUTH_SERVICE_URL=http://auth-service:4000
+      - LOG_LEVEL=${LOG_LEVEL:-warn}
+      - MAX_MEMORY=2G
+    secrets:
+      - postgres_password
+      - jwt_secret
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      placement:
+        constraints:
+          - node.role == worker
+
+  # Knowledge Graph Database - Production Configuration
+  knowledge-graph:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=mcpgraph
+      - POSTGRES_USER=graphuser
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - type: volume
+        source: graph-data
+        target: /var/lib/postgresql/data
+        volume:
+          nocopy: true
+      - type: bind
+        source: ./database/init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+    networks:
+      - mcp-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphuser -d mcpgraph"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 6G
+          cpus: '3.0'
+        reservations:
+          memory: 4G
+          cpus: '2.0'
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.postgres == true
+
+  # Authentication Service - Production Configuration
+  auth-service:
+    build:
+      context: ./auth-framework
+      dockerfile: Dockerfile.prod
+    image: auth-service:${VERSION:-latest}
+    environment:
+      - NODE_ENV=production
+      - BITCOIN_NETWORK=${BITCOIN_NETWORK:-mainnet}
+      - KEY_STORAGE_PATH=/app/keys
+      - LOG_LEVEL=${LOG_LEVEL:-warn}
+    secrets:
+      - bitcoin_rpc_auth
+    volumes:
+      - type: volume
+        source: auth-keys
+        target: /app/keys
+        volume:
+          nocopy: true
+    networks:
+      - mcp-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      placement:
+        constraints:
+          - node.role == worker
+
+  # Internal Load Balancer (for service mesh)
+  internal-lb:
+    image: nginx:alpine
+    configs:
+      - source: nginx_config
+        target: /etc/nginx/nginx.conf
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      placement:
+        constraints:
+          - node.role == worker
+
+  # Monitoring Stack - Production Configuration
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+    volumes:
+      - prometheus-data:/prometheus
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.monitoring == true
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    secrets:
+      - grafana_admin_password
+    configs:
+      - source: grafana_config
+        target: /etc/grafana/grafana.ini
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      placement:
+        constraints:
+          - node.role == worker
+
+# External Volumes for Production (persistent across deployments)
+volumes:
+  graph-data:
+    driver: local
+    driver_opts:
+      type: nfs4
+      o: addr=${NFS_SERVER},rw
+      device: ":${NFS_PATH}/postgresql"
+  auth-keys:
+    driver: local
+    driver_opts:
+      type: nfs4
+      o: addr=${NFS_SERVER},rw
+      device: ":${NFS_PATH}/auth-keys"
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: nfs4
+      o: addr=${NFS_SERVER},rw
+      device: ":${NFS_PATH}/prometheus"
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: nfs4
+      o: addr=${NFS_SERVER},rw
+      device: ":${NFS_PATH}/grafana"
+
+# Overlay Network for Swarm
+networks:
+  mcp-internal:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: 10.0.1.0/24
+
+# Production Secrets
+secrets:
+  postgres_password:
+    external: true
+  jwt_secret:
+    external: true
+  bitcoin_rpc_auth:
+    external: true
+  grafana_admin_password:
+    external: true
+
+# Configuration Management
+configs:
+  nginx_config:
+    external: true
+  prometheus_config:
+    external: true
+  grafana_config:
+    external: true

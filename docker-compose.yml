@@ -1,0 +1,236 @@
+version: '3.8'
+
+services:
+  # MCP Client Application Container (B:container001)
+  mcp-client:
+    build:
+      context: ./client-application
+      dockerfile: Dockerfile
+    container_name: mcp-client-app
+    depends_on:
+      - knowledge-graph
+      - auth-service
+    networks:
+      - mcp-internal
+    environment:
+      - NODE_ENV=production
+      - GRAPH_DB_URL=postgresql://graphuser:graphpass@knowledge-graph:5432/mcpgraph
+      - AUTH_SERVICE_URL=http://auth-service:4000
+      - LOG_LEVEL=info
+    volumes:
+      - logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Knowledge Graph Database Container (B:container002)
+  knowledge-graph:
+    image: postgres:15-alpine
+    container_name: knowledge-graph-db
+    environment:
+      - POSTGRES_DB=mcpgraph
+      - POSTGRES_USER=graphuser
+      - POSTGRES_PASSWORD=graphpass
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8
+    volumes:
+      - graph-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphuser -d mcpgraph"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+  # Authentication Service Container (B:container003)
+  auth-service:
+    build:
+      context: ./auth-framework
+      dockerfile: Dockerfile
+    container_name: auth-service
+    environment:
+      - NODE_ENV=production
+      - BITCOIN_NETWORK=mainnet
+      - KEY_STORAGE_PATH=/app/keys
+      - LOG_LEVEL=info
+    volumes:
+      - auth-keys:/app/keys
+      - logs:/app/logs
+    networks:
+      - mcp-internal
+    ports:
+      - "127.0.0.1:4000:4000"  # Internal access only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  # Load Balancer Container (B:container004)
+  load-balancer:
+    image: nginx:alpine
+    container_name: load-balancer
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - mcp-client
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-available:/etc/nginx/sites-available:ro
+      - ./ssl:/etc/ssl/private:ro
+      - logs:/var/log/nginx
+    networks:
+      - mcp-internal
+      - mcp-external
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+
+  # Monitoring System Container (B:container005)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: monitoring-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: monitoring-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+# Named Volumes for Persistence (B:arch003)
+volumes:
+  graph-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgresql
+  auth-keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/auth-keys
+  logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/prometheus
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/grafana
+
+# Network Configuration (B:arch002)
+networks:
+  mcp-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  mcp-external:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

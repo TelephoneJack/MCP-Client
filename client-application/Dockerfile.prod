@@ -1,0 +1,87 @@
+# Authentication Service Production Dockerfile (B:container003 - Production)
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY package*.json ./
+COPY yarn.lock* ./
+
+# Install all dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build and test
+RUN npm run build && npm run test
+
+# Production stage
+FROM node:18-alpine AS production
+
+# Install security updates and minimal runtime dependencies
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
+    curl \
+    ca-certificates \
+    openssl \
+    dumb-init \
+    tini && \
+    addgroup -g 1001 -S nodejs && \
+    adduser -S auth -u 1001 -G nodejs
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install production dependencies only
+RUN npm ci --only=production && \
+    npm cache clean --force && \
+    rm -rf /tmp/*
+
+# Copy built application from builder
+COPY --from=builder --chown=auth:nodejs /app/dist ./dist
+COPY --chown=auth:nodejs auth-server.js .
+COPY --chown=auth:nodejs config ./config
+
+# Create secure directories
+RUN mkdir -p /app/keys /app/logs /app/tmp && \
+    chown -R auth:nodejs /app/keys /app/logs /app/tmp && \
+    chmod 700 /app/keys && \
+    chmod 755 /app/logs /app/tmp
+
+# Security hardening
+RUN apk del --no-cache && \
+    rm -rf /var/cache/apk/* /tmp/* /var/tmp/*
+
+# Security: Run as non-root user
+USER auth
+
+# Enhanced health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f --connect-timeout 5 --max-time 10 http://localhost:4000/health || exit 1
+
+# Environment variables with security defaults
+ENV NODE_ENV=production \
+    PORT=4000 \
+    KEY_STORAGE_PATH=/app/keys \
+    NODE_OPTIONS="--max-old-space-size=768" \
+    UV_THREADPOOL_SIZE=2
+
+# Expose port
+EXPOSE 4000
+
+# Use tini for proper signal handling
+ENTRYPOINT ["tini", "--"]
+CMD ["node", "--enable-source-maps", "auth-server.js"]
+
+# Security and metadata labels
+LABEL maintainer="MCP Auth Team" \
+      version="1.0" \
+      description="Production Bitcoin NFT Authentication Service" \
+      org.opencontainers.image.source="https://github.com/your-org/auth-service" \
+      org.opencontainers.image.security.policy="security-policy.md"
