@@ -1,257 +1,242 @@
-# MCP Client Docker Infrastructure
+# MCP Client
 
-Production-ready Docker containerization system for MCP Client + Knowledge Graph deployment with load balancing, monitoring, and scalability.
+Knowledge Graph-powered MCP (Model Context Protocol) Client with episodic memory system.
 
-## 🏗️ Architecture Overview
+## Features
 
-**Multi-container system** with the following components:
-- **MCP Client Application** - Main application server (Node.js)
-- **Knowledge Graph Database** - PostgreSQL database for Graphiti
-- **Authentication Service** - Bitcoin NFT authentication (Node.js)
-- **Load Balancer** - NGINX reverse proxy with SSL termination
-- **Monitoring Stack** - Prometheus + Grafana for metrics and alerting
+- **Knowledge Graph Integration**: Graphiti-powered episodic memory system
+- **MCP Protocol Support**: Full Model Context Protocol implementation
+- **Docker Deployment**: Production-ready containerized architecture
+- **Control Center Dashboard**: Interactive knowledge graph visualization
+- **Bridge Architecture**: Maintains Sconce operational continuity
 
-## 📋 Prerequisites
+## Quick Start
 
-### Development Environment
+### Prerequisites
+
 - Docker Engine 20.10+
 - Docker Compose V2
-- 8GB RAM minimum (16GB recommended)
-- 50GB disk space
+- 8GB RAM minimum
+- 20GB disk space
 
-### Production Environment
-- Docker Swarm cluster (3+ nodes)
-- External load balancer (AWS ALB, GCP Load Balancer)
-- Persistent storage backend (AWS EFS, GCP Persistent Disk)
-- SSL certificates
+### Installation
 
-## 🚀 Quick Start (Development)
+1. **Clone Repository**
+   ```bash
+   git clone https://github.com/[your-username]/MCP-Client.git
+   cd MCP-Client
+   ```
 
-### 1. Clone and Setup
-```bash
-git clone <repository-url>
-cd mcp-client-docker
-cp .env.template .env
-# Edit .env with your configuration
+2. **Configure Environment**
+   ```bash
+   cp .env.template .env
+   # Edit .env with your configuration
+   ```
+
+3. **Deploy with Docker**
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **Verify Installation**
+   ```bash
+   docker-compose ps
+   curl http://localhost/health
+   ```
+
+## Architecture
+
+### Container Services
+
+- **mcp-client-app**: Main MCP Client application
+- **knowledge-graph-db**: PostgreSQL database for Graphiti knowledge graph
+- **load-balancer**: NGINX reverse proxy
+- **monitoring**: Prometheus + Grafana monitoring
+
+### Network Architecture
+
+```
+Internet → Load Balancer → MCP Client → Knowledge Graph DB
+                        ↓
+                   Monitoring System
 ```
 
-### 2. Create Required Directories
-```bash
-mkdir -p data/{postgresql,auth-keys,prometheus,grafana} logs ssl
-chmod 700 data/auth-keys
-```
-
-### 3. Generate SSL Certificates (Development)
-```bash
-./scripts/generate-dev-ssl.sh
-```
-
-### 4. Start the Stack
-```bash
-docker-compose up -d
-```
-
-### 5. Verify Deployment
-```bash
-./scripts/health-check.sh
-```
-
-## 🌐 Service Endpoints
-
-| Service | URL | Purpose |
-|---------|-----|---------|
-| MCP Client | http://localhost | Main application |
-| Grafana | http://localhost:8080/grafana | Monitoring dashboard |
-| Prometheus | http://localhost:8080/prometheus | Metrics collection |
-
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
-Create `.env` file from template:
-
 ```bash
-# Application Configuration
-VERSION=latest
-LOG_LEVEL=info
+# Database Configuration
+DATABASE_URL=postgresql://postgres:password@knowledge-graph:5432/graphiti
 NODE_ENV=production
 
-# Database Configuration
-POSTGRES_PASSWORD=your_secure_password
-
-# Bitcoin Configuration
-BITCOIN_NETWORK=mainnet
-
-# SSL Configuration
-SSL_CERT_PATH=./ssl
+# Application Configuration
+MCP_PORT=3000
+LOG_LEVEL=info
 ```
 
-### SSL Certificates
+### Docker Compose Services
 
-#### Development
+The system uses a 4-container architecture:
+
+1. **MCP Client** (Node.js application)
+2. **Knowledge Graph Database** (PostgreSQL)
+3. **Load Balancer** (NGINX)
+4. **Monitoring** (Prometheus)
+
+## Development
+
+### Local Development Setup
+
 ```bash
-./scripts/generate-dev-ssl.sh
+# Install dependencies
+npm install
+
+# Run in development mode
+npm run dev
+
+# Run tests
+npm test
 ```
 
-#### Production
-Place your certificates in the `ssl/` directory:
-- `ssl/mcp-client.crt`
-- `ssl/mcp-client.key`
+### Building Docker Images
 
-## 📊 Monitoring
-
-### Health Checks
-
-All services include health checks:
 ```bash
-# Check all services
-docker-compose ps
+# Build all services
+docker-compose build
 
-# Manual health verification
-./scripts/health-check.sh
+# Build specific service
+docker-compose build mcp-client
 ```
 
-### Metrics and Alerting
+## Monitoring
 
-- **Prometheus**: Collects metrics from all services
-- **Grafana**: Visualizes metrics and provides dashboards
-- **Alert Rules**: Configured for critical conditions
+Access monitoring dashboards:
 
-**Key Metrics Monitored:**
-- Service availability
-- Resource utilization (CPU, Memory)
-- Response times and error rates
-- Database performance
-- Authentication success rates
+- **Prometheus**: http://localhost:9090
+- **Application Health**: http://localhost/health
+- **Container Stats**: `docker-compose ps`
 
-### Accessing Monitoring
+## Production Deployment
 
-1. **Grafana Dashboard**: http://localhost:8080/grafana
-   - Username: admin
-   - Password: admin123
+### Docker Swarm Deployment
 
-2. **Prometheus**: http://localhost:8080/prometheus
-
-## 🔄 Scaling
-
-### Horizontal Scaling
-
-Scale individual services:
 ```bash
-# Scale MCP Client to 3 replicas
-docker-compose up -d --scale mcp-client=3
-
-# Scale authentication service
-docker-compose up -d --scale auth-service=2
-```
-
-### Resource Optimization
-
-Services are configured with resource limits:
-- **MCP Client**: 2GB RAM, 1 CPU
-- **Knowledge Graph**: 4GB RAM, 2 CPU
-- **Auth Service**: 1GB RAM, 0.5 CPU
-- **Load Balancer**: 512MB RAM, 0.25 CPU
-- **Monitoring**: 1GB RAM, 0.5 CPU
-
-## 🔒 Security
-
-### Network Security
-- Internal services isolated from external access
-- TLS encryption for external communication
-- Network segmentation with bridge networks
-
-### Container Security
-- Non-root user execution
-- Minimal Alpine Linux base images
-- Regular security updates
-- Secrets management via Docker secrets
-
-### Access Control
-- Rate limiting on API endpoints
-- Authentication required for sensitive operations
-- Monitoring dashboard restricted to internal network
-
-## 📦 Production Deployment
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed production deployment instructions.
-
-### Quick Production Deploy
-```bash
-# Initialize Docker Swarm
+# Initialize swarm
 docker swarm init
 
-# Create secrets
-./scripts/create-secrets.sh
-
-# Deploy production stack
+# Deploy stack
 docker stack deploy -c docker-compose.prod.yml mcp-client
+
+# Monitor deployment
+docker service ls
 ```
 
-## 🔧 Maintenance
+### Environment Setup
 
-### Backup
-```bash
-# Automated backup
-./scripts/backup.sh
+1. Configure external database
+2. Set up SSL certificates
+3. Configure monitoring alerts
+4. Set up backup procedures
 
-# Manual database backup
-docker-compose exec knowledge-graph pg_dump -U graphuser mcpgraph > backup.sql
+## API Documentation
+
+### Health Check
+
+```
+GET /health
+Response: {"status": "ok", "services": {"database": "connected", "graph": "ready"}}
 ```
 
-### Updates
-```bash
-# Pull latest images
-docker-compose pull
+### MCP Endpoints
 
-# Restart with new images
-docker-compose up -d
+```
+POST /mcp/tools
+POST /mcp/resources
+GET /mcp/status
+```
+
+## Knowledge Graph
+
+The integrated knowledge graph provides:
+
+- **Episodic Memory**: Context-aware conversation memory
+- **Entity Recognition**: Automatic entity extraction and linking
+- **Relationship Mapping**: Dynamic relationship discovery
+- **Query Interface**: GraphQL and REST APIs
+
+### Graph Operations
+
+```bash
+# Query graph
+curl -X POST http://localhost/graph/query -d '{"query": "MATCH (n) RETURN n LIMIT 10"}'
+
+# Add entities
+curl -X POST http://localhost/graph/entities -d '{"name": "example", "type": "concept"}'
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Database Connection Failed**
+```bash
+# Check database status
+docker-compose logs knowledge-graph
+# Restart database
+docker-compose restart knowledge-graph
+```
+
+**High Memory Usage**
+```bash
+# Check container resources
+docker stats
+# Restart services
+docker-compose restart
+```
+
+**SSL Certificate Issues**
+```bash
+# Renew certificates
+./scripts/renew-ssl.sh
+# Restart load balancer
+docker-compose restart load-balancer
 ```
 
 ### Logs
+
 ```bash
 # View all logs
+docker-compose logs
+
+# View specific service logs
+docker-compose logs mcp-client
+docker-compose logs knowledge-graph
+
+# Follow logs in real-time
 docker-compose logs -f
-
-# Service-specific logs
-docker-compose logs -f mcp-client
-docker-compose logs -f knowledge-graph
 ```
 
-## 🛠️ Troubleshooting
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions.
-
-### Quick Diagnostics
-```bash
-# Check service health
-./scripts/health-check.sh
-
-# View resource usage
-docker stats
-
-# Check network connectivity
-docker network ls
-docker-compose exec mcp-client ping knowledge-graph
-```
-
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
-2. Create feature branch
-3. Test changes locally
-4. Submit pull request
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-## 📄 License
+## License
 
-[Your License Here]
+[Specify your license here]
 
-## 🆘 Support
+## Support
 
-- **Issues**: GitHub Issues
-- **Documentation**: [docs/](docs/)
-- **Health Checks**: `./scripts/health-check.sh`
+- **Issues**: [GitHub Issues](https://github.com/[your-username]/MCP-Client/issues)
+- **Documentation**: [Wiki](https://github.com/[your-username]/MCP-Client/wiki)
+- **Contact**: [your-email@example.com]
 
 ---
 
-**Built with ❤️ for scalable MCP Client deployment**
+**Project Status**: Active Development  
+**Latest Version**: v1.0.0  
+**Docker Support**: ✅ Production Ready
